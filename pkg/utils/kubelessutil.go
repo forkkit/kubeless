@@ -26,15 +26,16 @@ import (
 	"strconv"
 	"strings"
 
+	"io/ioutil"
+
 	monitoringv1alpha1 "github.com/coreos/prometheus-operator/pkg/client/monitoring/v1alpha1"
 	"github.com/ghodss/yaml"
 	kubelessApi "github.com/kubeless/kubeless/pkg/apis/kubeless/v1beta1"
 	"github.com/kubeless/kubeless/pkg/langruntime"
 	"github.com/sirupsen/logrus"
-	"io/ioutil"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
-	"k8s.io/api/core/v1"
-	"k8s.io/api/extensions/v1beta1"
+	v1 "k8s.io/api/core/v1"
 	clientsetAPIExtensions "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -79,7 +80,7 @@ func getProvisionContainer(function, checksum, fileName, handler, contentType, r
 		originFile = decodedFile
 	} else if strings.Contains(contentType, "url") {
 		fromURLFile := "/tmp/func.fromurl"
-		prepareCommand = appendToCommand(prepareCommand, fmt.Sprintf("curl %s -L --silent --output %s", function, fromURLFile))
+		prepareCommand = appendToCommand(prepareCommand, fmt.Sprintf("curl '%s' -L --silent --output %s", function, fromURLFile))
 		originFile = fromURLFile
 	} else if strings.Contains(contentType, "text") || contentType == "" {
 		// Assumming that function is plain text
@@ -578,8 +579,8 @@ func EnsureFuncDeployment(client kubernetes.Interface, funcObj *kubelessApi.Func
 		MatchLabels: funcObj.ObjectMeta.Labels,
 	}
 
-	dpm.Spec.Strategy = v1beta1.DeploymentStrategy{
-		RollingUpdate: &v1beta1.RollingUpdateDeployment{
+	dpm.Spec.Strategy = appsv1.DeploymentStrategy{
+		RollingUpdate: &appsv1.RollingUpdateDeployment{
 			MaxUnavailable: &maxUnavailable,
 		},
 	}
@@ -683,12 +684,34 @@ func EnsureFuncDeployment(client kubernetes.Interface, funcObj *kubelessApi.Func
 		}
 	}
 
-	_, err = client.ExtensionsV1beta1().Deployments(funcObj.ObjectMeta.Namespace).Create(dpm)
+	// Add soft pod anti affinity
+	if dpm.Spec.Template.Spec.Affinity == nil {
+		dpm.Spec.Template.Spec.Affinity = &v1.Affinity{
+			PodAntiAffinity: &v1.PodAntiAffinity{
+				PreferredDuringSchedulingIgnoredDuringExecution: []v1.WeightedPodAffinityTerm{
+					{
+						Weight: 100,
+						PodAffinityTerm: v1.PodAffinityTerm{
+							LabelSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									"created-by": "kubeless",
+									"function":   funcObj.ObjectMeta.Name,
+								},
+							},
+							TopologyKey: "kubernetes.io/hostname",
+						},
+					},
+				},
+			},
+		}
+	}
+
+	_, err = client.AppsV1().Deployments(funcObj.ObjectMeta.Namespace).Create(dpm)
 	if err != nil && k8sErrors.IsAlreadyExists(err) {
 		// In case the Deployment already exists we should update
 		// just certain fields (to avoid race conditions)
-		var newDpm *v1beta1.Deployment
-		newDpm, err = client.ExtensionsV1beta1().Deployments(funcObj.ObjectMeta.Namespace).Get(funcObj.ObjectMeta.Name, metav1.GetOptions{})
+		var newDpm *appsv1.Deployment
+		newDpm, err = client.AppsV1().Deployments(funcObj.ObjectMeta.Namespace).Get(funcObj.ObjectMeta.Name, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
@@ -707,7 +730,7 @@ func EnsureFuncDeployment(client kubernetes.Interface, funcObj *kubelessApi.Func
 			return err
 		}
 		// Use `Patch` to do a rolling update
-		_, err = client.ExtensionsV1beta1().Deployments(funcObj.ObjectMeta.Namespace).Patch(newDpm.Name, types.MergePatchType, data)
+		_, err = client.AppsV1().Deployments(funcObj.ObjectMeta.Namespace).Patch(newDpm.Name, types.MergePatchType, data)
 		if err != nil {
 			return err
 		}

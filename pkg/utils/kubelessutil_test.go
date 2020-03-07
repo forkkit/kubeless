@@ -9,8 +9,8 @@ import (
 	kubelessApi "github.com/kubeless/kubeless/pkg/apis/kubeless/v1beta1"
 	"github.com/kubeless/kubeless/pkg/langruntime"
 
-	"k8s.io/api/core/v1"
-	"k8s.io/api/extensions/v1beta1"
+	appsv1 "k8s.io/api/apps/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -471,8 +471,8 @@ func getDefaultFunc(name, ns string) *kubelessApi.Function {
 				},
 				Type: v1.ServiceTypeClusterIP,
 			},
-			Deployment: v1beta1.Deployment{
-				Spec: v1beta1.DeploymentSpec{
+			Deployment: appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
 					Template: v1.PodTemplateSpec{
 						Spec: v1.PodSpec{
 							Containers: []v1.Container{
@@ -546,7 +546,7 @@ func TestEnsureDeployment(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
-	dpm, err := clientset.ExtensionsV1beta1().Deployments(ns).Get(f1Name, metav1.GetOptions{})
+	dpm, err := clientset.AppsV1().Deployments(ns).Get(f1Name, metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
@@ -636,8 +636,32 @@ func TestEnsureDeployment(t *testing.T) {
 			},
 		},
 	}
+
 	if !reflect.DeepEqual(dpm.Spec.Template.Spec.Containers[0], expectedContainer) {
 		t.Errorf("Unexpected container definition. Received:\n %+v\nExpecting:\n %+v", dpm.Spec.Template.Spec.Containers[0], expectedContainer)
+	}
+
+	expectedAffinity := &v1.Affinity{
+		PodAntiAffinity: &v1.PodAntiAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: []v1.WeightedPodAffinityTerm{
+				{
+					Weight: 100,
+					PodAffinityTerm: v1.PodAffinityTerm{
+						LabelSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{
+								"created-by": "kubeless",
+								"function":   f1Name,
+							},
+						},
+						TopologyKey: "kubernetes.io/hostname",
+					},
+				},
+			},
+		},
+	}
+
+	if !reflect.DeepEqual(dpm.Spec.Template.Spec.Affinity, expectedAffinity) {
+		t.Errorf("Unexpected pod affinity definition. Received:\n %+v\nExpecting:\n %+v", dpm.Spec.Template.Spec.Affinity, expectedAffinity)
 	}
 
 	secrets := dpm.Spec.Template.Spec.ImagePullSecrets
@@ -669,7 +693,7 @@ func TestEnsureDeploymentWithoutFuncNorHandler(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
-	_, err = clientset.ExtensionsV1beta1().Deployments(ns).Get(funcName, metav1.GetOptions{})
+	_, err = clientset.AppsV1().Deployments(ns).Get(funcName, metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
@@ -685,7 +709,7 @@ func TestEnsureDeploymentWithImage(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
-	dpm, err := clientset.ExtensionsV1beta1().Deployments(ns).Get(funcName, metav1.GetOptions{})
+	dpm, err := clientset.AppsV1().Deployments(ns).Get(funcName, metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
@@ -705,7 +729,7 @@ func TestEnsureDeploymentWithoutFunc(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
-	dpm, err := clientset.ExtensionsV1beta1().Deployments(ns).Get(funcName, metav1.GetOptions{})
+	dpm, err := clientset.AppsV1().Deployments(ns).Get(funcName, metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
@@ -747,7 +771,7 @@ func TestEnsureUpdateDeployment(t *testing.T) {
 func TestAvoidDeploymentOverwrite(t *testing.T) {
 	f1Name := "f1"
 	clientset, or, ns, lr := prepareDeploymentTest(f1Name)
-	clientset.ExtensionsV1beta1().Deployments(ns).Create(&v1beta1.Deployment{
+	clientset.AppsV1().Deployments(ns).Create(&appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      f1Name,
 			Namespace: ns,
@@ -784,7 +808,7 @@ func TestDeploymentWithTimeout(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
-	dpm, err := clientset.ExtensionsV1beta1().Deployments(ns).Get(funcName, metav1.GetOptions{})
+	dpm, err := clientset.AppsV1().Deployments(ns).Get(funcName, metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
@@ -802,7 +826,7 @@ func TestDeploymentWithPrebuiltImage(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
-	dpm, err := clientset.ExtensionsV1beta1().Deployments(ns).Get(funcName, metav1.GetOptions{})
+	dpm, err := clientset.AppsV1().Deployments(ns).Get(funcName, metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
@@ -835,7 +859,7 @@ func TestDeploymentWithVolumes(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
-	dpm, err := clientset.ExtensionsV1beta1().Deployments(ns).Get(funcName, metav1.GetOptions{})
+	dpm, err := clientset.AppsV1().Deployments(ns).Get(funcName, metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
@@ -844,6 +868,30 @@ func TestDeploymentWithVolumes(t *testing.T) {
 	}
 	if dpm.Spec.Template.Spec.Containers[0].VolumeMounts[0].Name != "test" {
 		t.Error("Should maintain volumen test")
+	}
+}
+
+func TestEnsureDeploymentWithAffinityOverridden(t *testing.T) {
+	funcName := "func"
+	clientset, or, ns, lr := prepareDeploymentTest(funcName)
+	// If the Image has been already provided it should not resolve it
+	f3 := getDefaultFunc(funcName, ns)
+	f3.Spec.Deployment.Spec.Template.Spec.Affinity = &v1.Affinity{}
+	err := EnsureFuncDeployment(clientset, f3, or, lr, "", "unzip", []v1.LocalObjectReference{})
+	if err != nil {
+		t.Errorf("Unexpected error: %s", err)
+	}
+	dpm, err := clientset.AppsV1().Deployments(ns).Get(funcName, metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("Unexpected error: %s", err)
+	}
+	expectedAffinity := &v1.Affinity{NodeAffinity: nil, PodAffinity: nil, PodAntiAffinity: nil}
+	if *dpm.Spec.Template.Spec.Affinity != *expectedAffinity {
+		t.Errorf(
+			"Unexpected Affinity Definition:\nExpecting: %+v\nReceived: %+v",
+			expectedAffinity,
+			dpm.Spec.Template.Spec.Affinity,
+		)
 	}
 }
 
@@ -921,7 +969,7 @@ func TestGetProvisionContainer(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
-	if !strings.HasPrefix(c.Args[0], "curl https://raw.githubusercontent.com/test/test/test/test.py -L --silent --output /tmp/func.fromurl") {
+	if !strings.HasPrefix(c.Args[0], "curl 'https://raw.githubusercontent.com/test/test/test/test.py' -L --silent --output /tmp/func.fromurl") {
 		t.Errorf("Unexpected command: %s", c.Args[0])
 	}
 
@@ -930,7 +978,7 @@ func TestGetProvisionContainer(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error: %s", err)
 	}
-	if !strings.HasPrefix(c.Args[0], "curl https://raw.githubusercontent.com/test/test/test/test.py -L --silent --output /tmp/func.fromurl") {
+	if !strings.HasPrefix(c.Args[0], "curl 'https://raw.githubusercontent.com/test/test/test/test.py' -L --silent --output /tmp/func.fromurl") {
 		t.Errorf("Unexpected command: %s", c.Args[0])
 	}
 }
